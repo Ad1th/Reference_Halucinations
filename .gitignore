@@ -1,0 +1,15 @@
+.env
+.venv
+.vscode
+paper.pdf
+paper2.pdf
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+.DS_Store 
+logs/
+*.log
+.ipynb_checkpoints
