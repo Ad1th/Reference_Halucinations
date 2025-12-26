@@ -173,6 +173,6 @@ def verify_title(title: str) -> dict:
     }
 
 if __name__ == "__main__":
-    test_title = "The Google File System"
+    test_title = "Neural network decoder for (7,4) Hamming code"
     result = verify_title(test_title)
     print(result)
