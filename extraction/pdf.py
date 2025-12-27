@@ -10,7 +10,8 @@ def get_references(pdf_path: str) -> list[str]:
     texts = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            t = page.extract_text()
+            # Lowering x_tolerance (default is 3) ensures smaller gaps between characters are treated as spaces.
+            t = page.extract_text(x_tolerance=1.5)
             if t: texts.append(t)
     text = normalize_newlines("\n".join(texts))
     match = re.search(r'(?i)(?:\n|^)\s*(?:[0-9]+\.?\s*)?(?:References|Bibliography)\s*(?:\n|$)', text)
