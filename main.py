@@ -1,31 +1,11 @@
-import argparse
+#!/usr/bin/env python3
 import sys
-from ref_extractor import get_references
-from title_extractor import extract_title
+import os
 
-def main():
-    parser = argparse.ArgumentParser(description="Extract references and titles from a PDF file")
-    parser.add_argument("file", nargs="?", default="paper.pdf", help="Path to the PDF file (default: paper.pdf)")
-    args = parser.parse_args()
+# Add src to python path so we can import our package
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-    # Get references using the ref_extractor module
-    references = get_references(args.file)
-    
-    if not references:
-        print("No References section found or PDF has no extractable text / recognizable format.")
-        sys.exit(0)
-
-    # Process and print references
-    for ref in references:
-        print("-" * 40)
-        print(f"Reference: {ref}")
-        
-        # Extract title using the title_extractor module
-        title = extract_title(ref)
-        if title:
-            print(f"Title: {title}")
-        else:
-            print("Title: (not found)")
+from ref_hal.cli import main
 
 if __name__ == "__main__":
     main()
