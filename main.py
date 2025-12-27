@@ -18,7 +18,7 @@ def main():
             for res in results:
                 print("-" * 30)
                 print(f"TITLE: {res['extracted_title']}")
-                print(f"REF:   {res['reference'][:100]}...")
+                print(f"REF:   {res['reference']}")
     except Exception as e:
         print(f"Error: {e}")
 

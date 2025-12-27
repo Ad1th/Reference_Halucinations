@@ -18,17 +18,15 @@ def extract_title(reference_text: str) -> str:
     # Most ACM/IEEE refs are: Authors. Year. Title. Venue.
     parts = [p.strip() for p in clean_ref.split('.') if p.strip()]
     
+    # Filter out very short parts like 'n' or 'd' from [n.d.]
+    parts = [p for p in parts if len(p) > 2 or p.isdigit()]
+    
     if len(parts) >= 3:
-        # Check if parts[1] is a year (4 digits)
-        if re.match(r'^\d{4}$', parts[1]):
-            # If parts[1] is the year, parts[2] is likely the title
+        # Check if parts[1] is a year (4 digits) or [n.d.]
+        if re.match(r'^\d{4}$', parts[1]) or "n.d" in parts[1].lower():
             return parts[2]
-        
-        # If parts[0] is authors and there is no year part, 
-        # parts[1] might be the title
         return parts[1]
         
-    # Fallback to the second part if we have at least authors + title
     if len(parts) > 1:
         return parts[1]
         
