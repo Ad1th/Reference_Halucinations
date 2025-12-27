@@ -5,7 +5,7 @@ from .core.verifier import verify_references
 
 def main():
     parser = argparse.ArgumentParser(description="Verify references in a PDF file for hallucinations.")
-    parser.add_argument("pdf_path", help="Path to the PDF file")
+    parser.add_argument("pdf_path", nargs="?", default="data/raw/paper.pdf", help="Path to the PDF file (default: data/raw/paper.pdf)")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
     args = parser.parse_args()
 
