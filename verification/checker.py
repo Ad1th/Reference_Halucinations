@@ -8,11 +8,40 @@ def verify_references(pdf_path: str):
     references = get_references(pdf_path)
     results = []
     
+    # Set to False to disable DBLP API lookups and speed up extraction, and True if we want to verify the references with DBLP.
+    ENABLE_DBLP_CHECK = True 
+
     for ref in references:
         title = extract_title(ref)
-        results.append({
+        result = {
             "reference": ref,
             "extracted_title": title,
-            "status": "NOT_CHECKED"
-        })
+            "status": "NOT_CHECKED",
+            "confidence": 0.0,
+            "matched_title": None
+        }
+
+        if ENABLE_DBLP_CHECK and title:
+            dblp_res = query_dblp(title)
+            candidates = extract_candidates(dblp_res)
+            
+            best_match = None
+            max_score = 0.0
+            
+            for candidate in candidates:
+                score = title_similarity(title, candidate["title"])
+                if score > max_score:
+                    max_score = score
+                    best_match = candidate
+            
+            if best_match and max_score >= 0.6: # SIMILARITY_THRESHOLD
+                result["status"] = "FOUND"
+                result["confidence"] = round(max_score, 3)
+                result["matched_title"] = best_match["title"]
+                result["match_info"] = best_match
+            else:
+                result["status"] = "NOT_FOUND"
+                result["confidence"] = round(max_score, 3)
+        
+        results.append(result)
     return results

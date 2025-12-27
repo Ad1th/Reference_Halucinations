@@ -17,8 +17,11 @@ def main():
         else:
             for res in results:
                 print("-" * 30)
-                print(f"TITLE: {res['extracted_title']}")
-                print(f"REF:   {res['reference']}")
+                print(f"TITLE:  {res['extracted_title']}")
+                print(f"STATUS: {res['status']} (Conf: {res.get('confidence', 0)})")
+                if res.get('matched_title'):
+                    print(f"DBLP:   {res['matched_title']}")
+                print(f"REF:    {res['reference']}")
     except Exception as e:
         print(f"Error: {e}")
 

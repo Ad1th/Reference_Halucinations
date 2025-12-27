@@ -34,36 +34,45 @@ Reference_Halucinations/
 └── requirements.txt        # Project dependencies
 ```
 
+## ⚙️ How to Toggle Verification
+
+You can enable or disable DBLP API lookups to speed up the process if you only want to test the title extraction.
+
+1. Open `verification/checker.py`.
+2. Find the line: `ENABLE_DBLP_CHECK = True`
+3. Set it to `False` to skip API checks, or `True` to verify references.
+
 ## 🔄 Data Flow
 
-When you run the command, the data moves through the application following this simplified pipeline:
+When you run the command, the data moves through the application following this pipeline:
 
 1.  **Entry Point (`main.py`)**:
-    *   Gets the `pdf_path` from CLI (defaults to `paper.pdf`).
+    *   Gets the `pdf_path` from CLI.
     *   Calls `verify_references(pdf_path)` in `verification/checker.py`.
 
 2.  **Orchestration (`verification/checker.py`)**:
     *   Coordinates the flow between extraction and verification.
     *   Calls `get_references` in `extraction/pdf.py`.
+    *   Iterates through references, calls the parser, and (optionally) the DBLP lookup.
 
 3.  **PDF Extraction (`extraction/pdf.py`)**:
     *   Uses `pdfplumber` to extract text from the "References" section.
-    *   Splits text into individual reference strings (e.g., `[1] Author, Title...`).
+    *   Splits text into individual reference strings based on citation markers like `[1]`.
     *   **Returns**: A list of raw reference strings.
 
 4.  **Reference Parsing (`extraction/parser.py`)**:
-    *   For each reference, it isolates the **Paper Title** using format heuristics.
+    *   Isolates the **Paper Title** from the raw citation string using academic format heuristics.
     *   **Returns**: The extracted title string.
 
 5.  **External Lookup (`verification/dblp.py`)**:
-    *   *(Integration in progress)* Sends the title to the DBLP API to find matching publications.
-    *   **Returns**: A list of candidate paper objects.
+    *   Sends the title to the DBLP API to find matching publications.
+    *   **Returns**: A list of candidate paper objects (Title, Authors, Year).
 
 6.  **Similarity Check (`verification/utils.py`)**:
-    *   Provides logic to compare extracted titles with API results.
+    *   Compares the extracted title with API results to calculate a confidence score.
 
 7.  **Final Output**:
-    *   `main.py` prints the results to your terminal.
+    *   `main.py` prints a report showing the Extracted Title, DBLP Match (if found), Status (FOUND/NOT_FOUND/NOT_CHECKED), and Confidence score.
 
 ## 🛠 Installation
 
