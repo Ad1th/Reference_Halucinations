@@ -13,3 +13,6 @@ __pycache__/
 logs/
 *.log
 .ipynb_checkpoints
+paper3.pdf
+paper4.pdf
+papers
