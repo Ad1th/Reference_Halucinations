@@ -1,13 +1,26 @@
-#!/usr/bin/env python3
+# Entry point script; gets PDF path from CLI and sends it to verification/checker.py for processing.
+import argparse
 import sys
-import os
+import json
+from verification.checker import verify_references
 
-# Add src to python path so we can import our package
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+def main():
+    parser = argparse.ArgumentParser(description="Clean Reference Checker")
+    parser.add_argument("pdf_path", nargs="?", default="data/raw/paper.pdf")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
 
-from ref_hal.cli import main
+    try:
+        results = verify_references(args.pdf_path)
+        if args.json:
+            print(json.dumps(results, indent=2))
+        else:
+            for res in results:
+                print("-" * 30)
+                print(f"TITLE: {res['extracted_title']}")
+                print(f"REF:   {res['reference'][:100]}...")
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
-
-

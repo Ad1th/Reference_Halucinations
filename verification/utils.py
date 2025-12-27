@@ -1,3 +1,4 @@
+# Shared text utility functions; provides cleaning and similarity logic used by both extraction and verification modules.
 import re
 from difflib import SequenceMatcher
 
