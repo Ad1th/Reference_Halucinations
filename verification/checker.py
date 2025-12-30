@@ -4,12 +4,18 @@ from extraction.parser import extract_title
 from verification.dblp import query_dblp, extract_candidates
 from verification.utils import title_similarity
 
+# This file calls  parser and pdf.py to extract references and their titles manually by regex.
+# Then it calls dblp.py to query DBLP for the titles.
+# Then it calls utils.py to calculate the similarity between the extracted titles and the DBLP titles.
+# This can be modified to be used as a fallback if the GROBID does not work.
+
+
 def verify_references(pdf_path: str):
     references = get_references(pdf_path)
     results = []
     
     # Set to False to disable DBLP API lookups and speed up extraction, and True if we want to verify the references with DBLP.
-    ENABLE_DBLP_CHECK = True 
+    ENABLE_DBLP_CHECK = False 
 
     for ref in references:
         title = extract_title(ref)

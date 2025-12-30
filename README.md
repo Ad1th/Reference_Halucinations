@@ -84,3 +84,16 @@ When you run the command, the data moves through the application following this 
    ```bash
    ./.venv/bin/pip install -r requirements.txt
    ```
+
+
+
+
+docker pull grobid/grobid:0.8.2-full
+
+
+docker run --rm --init -p 8070:8070 grobid/grobid:0.8.2-full
+
+
+curl http://localhost:8070/api/isalive
+
+/usr/local/bin/python3 -m pip install lxml
