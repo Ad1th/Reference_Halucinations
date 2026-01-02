@@ -13,6 +13,60 @@ def clean_title(title: str) -> str:
     title = " ".join(title.split())
     return title
 
+
+def fix_grobid_title_errors(title: str) -> str:
+    """
+    Fix common GROBID extraction errors in titles.
+    - Fix missing spaces in compound words (e.g., "schemabased" -> "schema-based")
+    - Fix missing hyphens in compound terms
+    """
+    if not title:
+        return ""
+    
+    # Common compound words that GROBID may concatenate
+    # Format: (wrong, correct)
+    compound_fixes = [
+        (r'\bschemabased\b', 'schema-based'),
+        (r'\bschemaagnostic\b', 'schema-agnostic'),
+        (r'\bdatabased\b', 'data-based'),
+        (r'\bdatadriven\b', 'data-driven'),
+        (r'\bmultiway\b', 'multi-way'),
+        (r'\bmultiscale\b', 'multi-scale'),
+        (r'\bcrosssilo\b', 'cross-silo'),
+        (r'\blowresource\b', 'low-resource'),
+        (r'\bpretrained\b', 'pre-trained'),
+        (r'\bfinetuning\b', 'fine-tuning'),
+        (r'\bfinetune\b', 'fine-tune'),
+        (r'\bprompttuning\b', 'prompt-tuning'),
+        (r'\bzerolabeled\b', 'zero-labeled'),
+        (r'\bzeroshot\b', 'zero-shot'),
+        (r'\bfewshot\b', 'few-shot'),
+        (r'\bendtoend\b', 'end-to-end'),
+        (r'\bstateoftheart\b', 'state-of-the-art'),
+        (r'\brealtime\b', 'real-time'),
+        (r'\brealworld\b', 'real-world'),
+        (r'\blargescale\b', 'large-scale'),
+        (r'\bhighresolution\b', 'high-resolution'),
+        (r'\binstanceoptimal\b', 'instance-optimal'),
+        (r'\buseroptimized\b', 'user-optimized'),
+        (r'\butilityoptimized\b', 'utility-optimized'),
+    ]
+    
+    result = title
+    for wrong, correct in compound_fixes:
+        result = re.sub(wrong, correct, result, flags=re.IGNORECASE)
+    
+    return result
+
+
+def normalize_title_for_search(title: str) -> str:
+    """
+    Normalize a title for DBLP search - combines cleaning and GROBID error fixes.
+    """
+    title = clean_title(title)
+    title = fix_grobid_title_errors(title)
+    return title
+
 def title_similarity(input_title: str, dblp_title: str) -> float:
     """Compute similarity score between two titles in range [0, 1]."""
     if not input_title or not dblp_title:

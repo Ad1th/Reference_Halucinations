@@ -1,6 +1,6 @@
 # Reference Hallucination Checker
 
-A Python tool that extracts bibliographic references from research papers (PDFs) using GROBID and verifies their existence using the DBLP API to detect "hallucinated" or incorrect citations.
+A multi-step verification pipeline that extracts bibliographic references from research papers (PDFs) using GROBID and verifies their existence using the DBLP API to detect "hallucinated" or incorrect citations.
 
 ## 🚀 Quick Start
 
@@ -14,20 +14,26 @@ A Python tool that extracts bibliographic references from research papers (PDFs)
    ```
 
 2. Verify GROBID is running:
+
    ```bash
    curl http://localhost:8070/api/isalive
+   ```
+
+3. **(Optional)** Set up Gemini API key for advanced verification:
+   ```bash
+   export GEMINI_API_KEY="your-api-key"
    ```
 
 ### Run the Tool
 
 ```bash
-python main.py <path_to_pdf>
+python3 main_pipeline.py <path_to_pdf>
 ```
 
 Example:
 
 ```bash
-python main.py paper.pdf
+python3 main_pipeline.py data/raw/paper.pdf
 ```
 
 ## 📂 Project Structure
@@ -36,64 +42,78 @@ python main.py paper.pdf
 Reference_Halucinations/
 ├── data/
 │   ├── raw/                    # Input PDFs
-│   └── output/                 # Verification reports
+│   └── output/                 # JSON output files
 ├── extraction/                 # Reference extraction modules
 │   ├── extractRefData.py       # Sends PDF to GROBID, returns XML
-│   └── extractTitle.py         # Parses XML to extract paper titles
+│   ├── extractMetadata.py      # Parses XML to extract full metadata
+│   ├── extractTitle.py         # Parses XML to extract paper titles
+│   ├── pdfplumber_extract.py   # Fallback PDF text extraction
+│   └── parser.py               # Reference parsing utilities
 ├── verification/               # Verification modules
 │   ├── dblp.py                 # DBLP API queries & classification
-│   ├── utils.py                # Title cleaning utilities
+│   ├── gemini.py               # Gemini API for advanced verification
+│   ├── utils.py                # Title cleaning & author matching
 │   ├── checker.py              # Legacy orchestrator
 │   └── verifier.py             # Verification helpers
+├── fluff/                      # Verification reports output
 ├── tests/                      # Test suite
 │   ├── unit/
 │   └── integration/
-├── main.py                     # Application entry point
+├── main_pipeline.py            # Multi-step verification pipeline
+├── main.py                     # Simple entry point (legacy)
 └── requirements.txt            # Project dependencies
 ```
 
-## 🔄 Data Flow
+## 🔄 Verification Pipeline
+
+The tool uses a 5-step verification process:
 
 ```
-PDF → GROBID → XML → Title Extraction → DBLP Lookup → Classification → Report
+PDF → GROBID → Step 1: DBLP Title Check → Step 2: Author Matching →
+Step 3: Regex Re-extraction → Step 4: Gemini Verification → Step 5: Final Report
 ```
 
-1. **Entry Point (`main.py`)**
+### Step 1: Pre-Metadata Check (DBLP Title Matching)
 
-   - Accepts a PDF path from CLI
-   - Orchestrates the extraction and verification pipeline
+- Extracts references from PDF via GROBID
+- Queries DBLP API with normalized titles
+- Applies length penalty for short/generic titles
+- Classifies as: VERIFIED, REVIEW, UNVERIFIED, or SUSPICIOUS
 
-2. **GROBID Extraction (`extraction/extractRefData.py`)**
+### Step 2: Author Name Matching
 
-   - Sends PDF to local GROBID service (`http://localhost:8070/api/processReferences`)
-   - Returns structured XML with parsed references
+- For references with DBLP candidates, compares author lists
+- Uses last-name matching with fuzzy comparison
+- Boosts confidence for matching authors/years
+- Re-queries DBLP for UNVERIFIED refs (handles transient failures)
 
-3. **Title Extraction (`extraction/extractTitle.py`)**
+### Step 3: Regex Re-extraction
 
-   - Parses GROBID XML using BeautifulSoup
-   - Extracts paper titles from `<biblStruct>` elements
-   - Returns a list of title strings
+- For UNVERIFIED/SUSPICIOUS references
+- Extracts raw text from PDF using pdfplumber
+- Applies regex patterns to find reference titles
+- Re-verifies against DBLP with corrected titles
 
-4. **DBLP Verification (`verification/dblp.py`)**
+### Step 4: Gemini Verification (Optional)
 
-   - Queries DBLP API with normalized titles
-   - Calculates similarity scores between extracted and matched titles
-   - Handles ambiguous matches when multiple candidates are close
+- Sends remaining uncertain references to Gemini API
+- Batch processing to avoid rate limiting
+- Returns verification status based on AI analysis
 
-5. **Classification (`verification/dblp.py`)**
+### Step 5: Final Analysis
 
-   - Assigns final labels based on verification results:
+- Generates comprehensive report with statistics
+- Sorts references by verification status
+- Outputs to `fluff/verification_report_<timestamp>.txt`
 
-   | Label        | Description                                                     |
-   | ------------ | --------------------------------------------------------------- |
-   | `VERIFIED`   | Title found in DBLP with high confidence                        |
-   | `REVIEW`     | Ambiguous match - multiple candidates with similar scores       |
-   | `UNVERIFIED` | Title not found in DBLP                                         |
-   | `SUSPICIOUS` | Short title (≤4 words) not found - likely incomplete extraction |
+## 📊 Classification Labels
 
-6. **Output**
-   - Results are sorted by severity: VERIFIED → REVIEW → UNVERIFIED → SUSPICIOUS
-   - Each result includes: input title, status, confidence score, and matched title (if found)
+| Label        | Description                                                    |
+| ------------ | -------------------------------------------------------------- |
+| `VERIFIED`   | Title found in DBLP with high confidence (≥0.7)                |
+| `REVIEW`     | Ambiguous match - multiple candidates with similar scores      |
+| `UNVERIFIED` | Title not found in DBLP (may be non-CS venue, book, or report) |
+| `SUSPICIOUS` | Low confidence match - metadata doesn't align well             |
 
 ## 🛠 Installation
 
@@ -110,17 +130,13 @@ PDF → GROBID → XML → Title Extraction → DBLP Lookup → Classification �
    pip install -r requirements.txt
    ```
 
-3. Install additional dependencies for XML parsing:
-   ```bash
-   pip install beautifulsoup4 lxml
-   ```
-
 ## 📦 Dependencies
 
 - `requests` - HTTP client for GROBID and DBLP APIs
 - `beautifulsoup4` - XML parsing for GROBID output
 - `lxml` - XML parser backend
-- `pdfplumber` - PDF text extraction (legacy)
+- `pdfplumber` - PDF text extraction for fallback
+- `google-generativeai` - Gemini API client (optional)
 
 ## ⚙️ Configuration
 
@@ -128,8 +144,17 @@ Key thresholds in `verification/dblp.py`:
 
 | Parameter              | Value | Description                               |
 | ---------------------- | ----- | ----------------------------------------- |
-| `SIMILARITY_THRESHOLD` | 0.6   | Minimum score to consider a match         |
+| `SIMILARITY_THRESHOLD` | 0.7   | Minimum score to consider a match         |
 | `AMBIGUITY_GAP`        | 0.05  | Gap between top matches to flag ambiguity |
+
+### GROBID Title Error Fixes
+
+The tool automatically fixes common GROBID extraction errors:
+
+- `schemabased` → `schema-based`
+- `prompttuning` → `prompt-tuning`
+- `lowresource` → `low-resource`
+- And many more compound word fixes
 
 ## 🐳 GROBID Setup
 
@@ -147,6 +172,26 @@ curl http://localhost:8070/api/isalive
 ```
 
 GROBID will be available at `http://localhost:8070`.
+
+## 📈 Typical Results
+
+On academic CS papers, the tool typically achieves:
+
+- **70-90% VERIFIED** - References found in DBLP
+- **0-5% REVIEW** - Need manual verification
+- **10-25% UNVERIFIED** - Not in DBLP (statistics journals, books, tech reports)
+- **0-2% SUSPICIOUS** - Low confidence matches
+
+### Common UNVERIFIED Categories (Not Hallucinations)
+
+- Statistics journals (JASA, Annals of Statistics)
+- GIS/Photogrammetry venues (ISPRS)
+- Pre-1970 classic papers
+- Books and book chapters
+- Technical reports
+- Dataset citations (e.g., Kaggle)
+
+## 🚀 Usage
 
 # Full pipeline
 

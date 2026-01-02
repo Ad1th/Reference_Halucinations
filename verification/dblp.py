@@ -2,7 +2,7 @@
 #updating this to get titles from extractTitles, which are extracted from the XML using BeautifulSoup, which is extracted from the PDF using GROBID.
 import requests
 from typing import List, Dict, Optional
-from verification.utils import clean_title
+from verification.utils import clean_title, fix_grobid_title_errors
 from difflib import SequenceMatcher
 
 SIMILARITY_THRESHOLD = 0.7  # Updated from 0.6 to require higher confidence
@@ -135,9 +135,17 @@ def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> D
     # Score candidates by both title similarity AND author overlap
     scored = []
     for c in candidates:
-        title_score = title_similarity(title, c["title"])
+        raw_title_score = title_similarity(title, c["title"])
         penalty = length_penalty(title)
-        base_score = title_score * penalty
+        
+        # For near-exact title matches (>0.95), reduce the length penalty impact
+        # A perfect title match is strong evidence even for short titles
+        if raw_title_score > 0.95:
+            penalty = max(penalty, 0.9)  # At least 0.9 for near-exact matches
+        elif raw_title_score > 0.90:
+            penalty = max(penalty, 0.85)  # Reduced penalty for very good matches
+            
+        base_score = raw_title_score * penalty
         
         # If we have authors, factor in author matching
         if authors and c.get("authors"):
@@ -192,10 +200,12 @@ def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> D
 def normalize_query(title: str) -> str:
     """
     Shorten and normalize title for DBLP search.
+    Also fixes common GROBID extraction errors.
     """
     title = clean_title(title)
+    title = fix_grobid_title_errors(title)  # Fix compound word errors
     tokens = title.split()
-    return " ".join(tokens[:6])  # first 6 tokens work best empirically
+    return " ".join(tokens[:8])  # Increased from 6 to 8 for better matching
 
 
 def length_penalty(title: str) -> float:
