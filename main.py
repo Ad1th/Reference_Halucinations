@@ -45,6 +45,25 @@ def main():
     for r in results:
         print(r)
 
+    # Print statistics
+    print("\n" + "=" * 50)
+    print("VERIFICATION SUMMARY")
+    print("=" * 50)
+    
+    total = len(results)
+    stats = {"VERIFIED": 0, "REVIEW": 0, "UNVERIFIED": 0, "SUSPICIOUS": 0}
+    
+    for r in results:
+        stats[r["final_label"]] += 1
+    
+    print(f"Total References: {total}")
+    print("-" * 50)
+    print(f"✓ VERIFIED:   {stats['VERIFIED']:3d}  ({100*stats['VERIFIED']/total:.1f}%)")
+    print(f"? REVIEW:     {stats['REVIEW']:3d}  ({100*stats['REVIEW']/total:.1f}%)")
+    print(f"✗ UNVERIFIED: {stats['UNVERIFIED']:3d}  ({100*stats['UNVERIFIED']/total:.1f}%)")
+    print(f"⚠ SUSPICIOUS: {stats['SUSPICIOUS']:3d}  ({100*stats['SUSPICIOUS']/total:.1f}%)")
+    print("=" * 50)
+
 
 if __name__ == "__main__":
     main()
