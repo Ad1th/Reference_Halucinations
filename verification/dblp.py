@@ -59,9 +59,10 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def verify_title_with_dblp(title: str) -> Dict:
+def verify_title_with_dblp(title: str, authors: List[str] = None) -> Dict:
     """
     Verifies whether a title exists in DBLP.
+    For short titles (<=4 words), also tries author-based search.
 
     Returns:
     {
@@ -71,8 +72,24 @@ def verify_title_with_dblp(title: str) -> Dict:
         dblp_metadata: {title, authors, year, venue, type, doi, url, pages, volume}
     }
     """
+    # Standard title search
     dblp_response = query_dblp(normalize_query(title))
     candidates = extract_candidates(dblp_response)
+    
+    # For short titles, also try author-based search
+    words = len(title.split())
+    if words <= 4 and authors:
+        first_author = authors[0].split()[-1] if authors else ""  # Last name
+        if first_author:
+            author_query = f"{title} {first_author}"
+            author_response = query_dblp(author_query)
+            author_candidates = extract_candidates(author_response)
+            # Merge candidates, avoiding duplicates
+            seen_titles = {c["title"].lower() for c in candidates}
+            for ac in author_candidates:
+                if ac["title"].lower() not in seen_titles:
+                    candidates.append(ac)
+                    seen_titles.add(ac["title"].lower())
 
     if not candidates:
         return {
@@ -84,13 +101,13 @@ def verify_title_with_dblp(title: str) -> Dict:
 
     scored = []
     for c in candidates:
-        base = title_similarity(title, c["title"])
-        penalty = length_penalty(title)
-        score = base * penalty
-        scored.append((score, c))
+        raw_score = title_similarity(title, c["title"])
+        penalty = length_penalty(title, raw_score)
+        score = raw_score * penalty
+        scored.append((score, raw_score, c))
 
     scored.sort(reverse=True, key=lambda x: x[0])
-    best_score, best_match = scored[0]
+    best_score, best_raw, best_match = scored[0]
 
     if best_score < SIMILARITY_THRESHOLD:
         return {
@@ -108,7 +125,7 @@ def verify_title_with_dblp(title: str) -> Dict:
                 "input_title": title,
                 "status": "AMBIGUOUS",
                 "confidence": round(best_score, 3),
-                "candidates": [c["title"] for _, c in scored[:2]],
+                "candidates": [c["title"] for _, _, c in scored[:2]],
                 "dblp_metadata": best_match  # Include best match metadata
             }
 
@@ -130,21 +147,50 @@ def normalize_query(title: str) -> str:
     return " ".join(tokens[:6])  # first 6 tokens work best empirically
 
 
-def length_penalty(title: str) -> float:
+def length_penalty(title: str, raw_similarity: float = 0.0) -> float:
     """
-    Penalize very short / generic titles.
+    Penalize very short / generic titles, BUT reduce penalty for near-exact matches.
+    
+    For classic papers like "Random forests" or "Bagging predictors", 
+    if the raw similarity is very high (>0.9), we trust it more.
     """
     words = len(title.split())
-    if words <= 3:
-        return 0.5
-    if words <= 5:
-        return 0.75
-    return 1.0
+    
+    # Near-exact matches for short titles should be trusted
+    if raw_similarity > 0.95:
+        # Very high similarity - minimal penalty even for short titles
+        if words <= 2:
+            return 0.85
+        if words <= 3:
+            return 0.9
+        if words <= 5:
+            return 0.95
+        return 1.0
+    elif raw_similarity > 0.85:
+        # Good similarity - reduced penalty
+        if words <= 2:
+            return 0.75
+        if words <= 3:
+            return 0.8
+        if words <= 5:
+            return 0.85
+        return 1.0
+    else:
+        # Standard penalty for lower similarity
+        if words <= 3:
+            return 0.5
+        if words <= 5:
+            return 0.75
+        return 1.0
 
 
 def classify_reference(result: Dict) -> Dict:
     """
     Assign final reference category.
+    
+    Short titles (<=4 words) are only marked SUSPICIOUS if:
+    - NOT_FOUND in DBLP AND
+    - Confidence is low (suggests no good partial match either)
     """
     title = result["input_title"]
     words = len(title.split())
@@ -157,10 +203,10 @@ def classify_reference(result: Dict) -> Dict:
         result["final_label"] = "REVIEW"
 
     else:  # NOT_FOUND
-        if words <= 4:
+        # Short titles with low confidence are suspicious
+        # But if there's some confidence (partial match), it might just be a variant
+        if words <= 4 and conf < 0.3:
             result["final_label"] = "SUSPICIOUS"
-        elif conf < 0.4:
-            result["final_label"] = "UNVERIFIED"
         else:
             result["final_label"] = "UNVERIFIED"
 

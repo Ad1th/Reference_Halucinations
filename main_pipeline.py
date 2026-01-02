@@ -124,11 +124,12 @@ def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple
     grobid_refs = extract_references_metadata(xml)
     report.write(f"Extracted {len(grobid_refs)} references")
     
-    # Verify each
+    # Verify each - pass authors for better matching on short titles
     results = []
     for i, ref in enumerate(grobid_refs, 1):
         title = ref["title"]
-        dblp_result = verify_title_with_dblp(title)
+        authors = ref.get("authors", [])
+        dblp_result = verify_title_with_dblp(title, authors)
         dblp_result = classify_reference(dblp_result)
         
         combined = {
