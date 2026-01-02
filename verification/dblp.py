@@ -51,7 +51,7 @@ def verify_title_with_dblp(title: str) -> Dict:
         year
     }
     """
-    dblp_response = query_dblp(title)
+    dblp_response = query_dblp(normalize_query(title))
     candidates = extract_candidates(dblp_response)
 
     if not candidates:
@@ -63,7 +63,9 @@ def verify_title_with_dblp(title: str) -> Dict:
 
     scored = []
     for c in candidates:
-        score = title_similarity(title, c["title"])
+        base = title_similarity(title, c["title"])
+        penalty = length_penalty(title)
+        score = base * penalty
         scored.append((score, c))
 
     scored.sort(reverse=True, key=lambda x: x[0])
@@ -94,3 +96,48 @@ def verify_title_with_dblp(title: str) -> Dict:
         "matched_title": best_match["title"],
         "year": best_match.get("year")
     }
+
+def normalize_query(title: str) -> str:
+    """
+    Shorten and normalize title for DBLP search.
+    """
+    title = clean_title(title)
+    tokens = title.split()
+    return " ".join(tokens[:6])  # first 6 tokens work best empirically
+
+
+def length_penalty(title: str) -> float:
+    """
+    Penalize very short / generic titles.
+    """
+    words = len(title.split())
+    if words <= 3:
+        return 0.5
+    if words <= 5:
+        return 0.75
+    return 1.0
+
+
+def classify_reference(result: Dict) -> Dict:
+    """
+    Assign final reference category.
+    """
+    title = result["input_title"]
+    words = len(title.split())
+    conf = result.get("confidence", 0.0)
+
+    if result["status"] == "FOUND":
+        result["final_label"] = "VERIFIED"
+
+    elif result["status"] == "AMBIGUOUS":
+        result["final_label"] = "REVIEW"
+
+    else:  # NOT_FOUND
+        if words <= 4:
+            result["final_label"] = "SUSPICIOUS"
+        elif conf < 0.4:
+            result["final_label"] = "UNVERIFIED"
+        else:
+            result["final_label"] = "UNVERIFIED"
+
+    return result

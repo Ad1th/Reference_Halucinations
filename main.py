@@ -6,7 +6,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from extraction.extractRefData import extract_references_xml
 from extraction.extractTitle import extract_titles_from_grobid_xml
-from verification.dblp import verify_title_with_dblp
+from verification.dblp import verify_title_with_dblp, classify_reference
+
+SORT_ORDER = {
+    "VERIFIED": 0,
+    "REVIEW": 1,
+    "UNVERIFIED": 2,
+    "SUSPICIOUS": 3
+}
+
 
 
 def main():
@@ -23,9 +31,19 @@ def main():
     titles = extract_titles_from_grobid_xml(xml)
 
     # 3. Verify each title using DBLP
+    results = []
+
     for title in titles:
-        result = verify_title_with_dblp(title)
-        print(result)
+        res = verify_title_with_dblp(title)
+        res = classify_reference(res)
+        results.append(res)
+
+    # Sort references
+    results.sort(key=lambda r: SORT_ORDER[r["final_label"]])
+
+    # Print results
+    for r in results:
+        print(r)
 
 
 if __name__ == "__main__":

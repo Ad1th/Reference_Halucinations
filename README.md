@@ -1,19 +1,33 @@
 # Reference Hallucination Checker
 
-A simplified Python tool designed to extract bibliographic references from research papers (PDFs) and verify their existence using the DBLP API to detect "hallucinated" or incorrect citations.
+A Python tool that extracts bibliographic references from research papers (PDFs) using GROBID and verifies their existence using the DBLP API to detect "hallucinated" or incorrect citations.
 
 ## 🚀 Quick Start
 
-To run the tool with the default paper (`data/raw/paper.pdf`):
+### Prerequisites
+
+1. **GROBID** must be running locally on port 8070:
+
+   ```bash
+   docker pull grobid/grobid:0.8.2-full
+   docker run --rm --init -p 8070:8070 grobid/grobid:0.8.2-full
+   ```
+
+2. Verify GROBID is running:
+   ```bash
+   curl http://localhost:8070/api/isalive
+   ```
+
+### Run the Tool
 
 ```bash
-./.venv/bin/python3 main.py
+python main.py <path_to_pdf>
 ```
 
-To run with a specific PDF:
+Example:
 
 ```bash
-./.venv/bin/python3 main.py data/raw/your_paper.pdf
+python main.py paper.pdf
 ```
 
 ## 📂 Project Structure
@@ -21,79 +35,115 @@ To run with a specific PDF:
 ```text
 Reference_Halucinations/
 ├── data/
-│   ├── raw/                # Input PDFs
-│   └── output/             # Verification reports (Future)
-├── extraction/             # Folder 1: Getting data OUT
-│   ├── pdf.py              # Reads PDF and extracts raw reference strings
-│   └── parser.py           # Isolates paper titles from raw strings
-├── verification/           # Folder 2: Checking data
-│   ├── dblp.py             # External API integration (DBLP)
-│   ├── checker.py          # Orchestrator that coordinates the workflow
-│   └── utils.py            # Shared cleaning and similarity constants
-├── main.py                 # Application entry point
-└── requirements.txt        # Project dependencies
+│   ├── raw/                    # Input PDFs
+│   └── output/                 # Verification reports
+├── extraction/                 # Reference extraction modules
+│   ├── extractRefData.py       # Sends PDF to GROBID, returns XML
+│   └── extractTitle.py         # Parses XML to extract paper titles
+├── verification/               # Verification modules
+│   ├── dblp.py                 # DBLP API queries & classification
+│   ├── utils.py                # Title cleaning utilities
+│   ├── checker.py              # Legacy orchestrator
+│   └── verifier.py             # Verification helpers
+├── tests/                      # Test suite
+│   ├── unit/
+│   └── integration/
+├── main.py                     # Application entry point
+└── requirements.txt            # Project dependencies
 ```
-
-## ⚙️ How to Toggle Verification
-
-You can enable or disable DBLP API lookups to speed up the process if you only want to test the title extraction.
-
-1. Open `verification/checker.py`.
-2. Find the line: `ENABLE_DBLP_CHECK = True`
-3. Set it to `False` to skip API checks, or `True` to verify references.
 
 ## 🔄 Data Flow
 
-When you run the command, the data moves through the application following this pipeline:
+```
+PDF → GROBID → XML → Title Extraction → DBLP Lookup → Classification → Report
+```
 
-1.  **Entry Point (`main.py`)**:
-    *   Gets the `pdf_path` from CLI.
-    *   Calls `verify_references(pdf_path)` in `verification/checker.py`.
+1. **Entry Point (`main.py`)**
 
-2.  **Orchestration (`verification/checker.py`)**:
-    *   Coordinates the flow between extraction and verification.
-    *   Calls `get_references` in `extraction/pdf.py`.
-    *   Iterates through references, calls the parser, and (optionally) the DBLP lookup.
+   - Accepts a PDF path from CLI
+   - Orchestrates the extraction and verification pipeline
 
-3.  **PDF Extraction (`extraction/pdf.py`)**:
-    *   Uses `pdfplumber` to extract text from the "References" section.
-    *   Splits text into individual reference strings based on citation markers like `[1]`.
-    *   **Returns**: A list of raw reference strings.
+2. **GROBID Extraction (`extraction/extractRefData.py`)**
 
-4.  **Reference Parsing (`extraction/parser.py`)**:
-    *   Isolates the **Paper Title** from the raw citation string using academic format heuristics.
-    *   **Returns**: The extracted title string.
+   - Sends PDF to local GROBID service (`http://localhost:8070/api/processReferences`)
+   - Returns structured XML with parsed references
 
-5.  **External Lookup (`verification/dblp.py`)**:
-    *   Sends the title to the DBLP API to find matching publications.
-    *   **Returns**: A list of candidate paper objects (Title, Authors, Year).
+3. **Title Extraction (`extraction/extractTitle.py`)**
 
-6.  **Similarity Check (`verification/utils.py`)**:
-    *   Compares the extracted title with API results to calculate a confidence score.
+   - Parses GROBID XML using BeautifulSoup
+   - Extracts paper titles from `<biblStruct>` elements
+   - Returns a list of title strings
 
-7.  **Final Output**:
-    *   `main.py` prints a report showing the Extracted Title, DBLP Match (if found), Status (FOUND/NOT_FOUND/NOT_CHECKED), and Confidence score.
+4. **DBLP Verification (`verification/dblp.py`)**
+
+   - Queries DBLP API with normalized titles
+   - Calculates similarity scores between extracted and matched titles
+   - Handles ambiguous matches when multiple candidates are close
+
+5. **Classification (`verification/dblp.py`)**
+
+   - Assigns final labels based on verification results:
+
+   | Label        | Description                                                     |
+   | ------------ | --------------------------------------------------------------- |
+   | `VERIFIED`   | Title found in DBLP with high confidence                        |
+   | `REVIEW`     | Ambiguous match - multiple candidates with similar scores       |
+   | `UNVERIFIED` | Title not found in DBLP                                         |
+   | `SUSPICIOUS` | Short title (≤4 words) not found - likely incomplete extraction |
+
+6. **Output**
+   - Results are sorted by severity: VERIFIED → REVIEW → UNVERIFIED → SUSPICIOUS
+   - Each result includes: input title, status, confidence score, and matched title (if found)
 
 ## 🛠 Installation
 
 1. Create a virtual environment:
+
    ```bash
    python3 -m venv .venv
+   source .venv/bin/activate
    ```
+
 2. Install dependencies:
+
    ```bash
-   ./.venv/bin/pip install -r requirements.txt
+   pip install -r requirements.txt
    ```
 
+3. Install additional dependencies for XML parsing:
+   ```bash
+   pip install beautifulsoup4 lxml
+   ```
 
+## 📦 Dependencies
 
+- `requests` - HTTP client for GROBID and DBLP APIs
+- `beautifulsoup4` - XML parsing for GROBID output
+- `lxml` - XML parser backend
+- `pdfplumber` - PDF text extraction (legacy)
 
+## ⚙️ Configuration
+
+Key thresholds in `verification/dblp.py`:
+
+| Parameter              | Value | Description                               |
+| ---------------------- | ----- | ----------------------------------------- |
+| `SIMILARITY_THRESHOLD` | 0.6   | Minimum score to consider a match         |
+| `AMBIGUITY_GAP`        | 0.05  | Gap between top matches to flag ambiguity |
+
+## 🐳 GROBID Setup
+
+Pull and run GROBID with Docker:
+
+```bash
+# Pull the full image (includes all models)
 docker pull grobid/grobid:0.8.2-full
 
-
+# Run GROBID server
 docker run --rm --init -p 8070:8070 grobid/grobid:0.8.2-full
 
-
+# Verify it's running
 curl http://localhost:8070/api/isalive
+```
 
-/usr/local/bin/python3 -m pip install lxml
+GROBID will be available at `http://localhost:8070`.
