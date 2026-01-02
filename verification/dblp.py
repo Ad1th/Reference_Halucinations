@@ -5,7 +5,7 @@ from typing import List, Dict
 from verification.utils import clean_title
 from difflib import SequenceMatcher
 
-SIMILARITY_THRESHOLD = 0.6
+SIMILARITY_THRESHOLD = 0.7  # Updated from 0.6 to require higher confidence
 AMBIGUITY_GAP = 0.05
 
 DBLP_API_URL = "https://dblp.org/search/publ/api"

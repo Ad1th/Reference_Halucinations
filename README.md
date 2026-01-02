@@ -147,3 +147,15 @@ curl http://localhost:8070/api/isalive
 ```
 
 GROBID will be available at `http://localhost:8070`.
+
+# Full pipeline
+
+python main_pipeline.py paper.pdf
+
+# Skip Gemini steps (if API quota exceeded)
+
+python main_pipeline.py paper.pdf --skip-gemini
+
+# Skip regex re-extraction
+
+python main_pipeline.py paper.pdf --skip-regex
