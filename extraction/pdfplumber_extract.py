@@ -43,7 +43,8 @@ def extract_references_text(pdf_path: str) -> Optional[str]:
     
     # If layout extraction produced text without spaces, try word-based extraction
     if full_text and _has_space_issues(full_text):
-        full_text = _extract_with_words(pdf_path)
+        # The PDF itself doesn't have proper spacing - try heuristic insertion
+        full_text = _insert_spaces_heuristically(full_text)
     
     # Find references section
     ref_patterns = [
@@ -83,6 +84,62 @@ def _has_space_issues(text: str) -> bool:
             if len(word) > 30 and any(c.islower() for c in word):
                 return True
     return False
+
+
+def _insert_spaces_heuristically(text: str) -> str:
+    """
+    Insert spaces into concatenated text using conservative heuristics.
+    
+    This handles PDFs that are encoded without word spacing information.
+    Only applies safe transformations that won't break valid text.
+    """
+    if not text:
+        return text
+    
+    result = []
+    i = 0
+    
+    while i < len(text):
+        char = text[i]
+        result.append(char)
+        
+        if i < len(text) - 1:
+            next_char = text[i + 1]
+            
+            # Insert space between lowercase and uppercase (camelCase split)
+            # This is the safest heuristic
+            if char.islower() and next_char.isupper():
+                result.append(' ')
+            
+            # Insert space before year patterns
+            elif char.isalpha() and next_char.isdigit():
+                if i + 4 < len(text):
+                    potential_year = text[i+1:i+5]
+                    if potential_year.isdigit() and potential_year[:2] in ('19', '20'):
+                        result.append(' ')
+            
+            # Insert space after year if followed by letter
+            elif char.isdigit() and next_char.isalpha():
+                if i >= 3:
+                    potential_year = text[i-3:i+1]
+                    if potential_year.isdigit() and potential_year[:2] in ('19', '20'):
+                        result.append(' ')
+            
+            # Insert space after sentence-ending punctuation if followed by uppercase
+            elif char in '.!?' and next_char.isupper():
+                result.append(' ')
+            
+            # Insert space after colon/semicolon if followed by letter
+            elif char in ':;' and next_char.isalpha():
+                result.append(' ')
+            
+            # Insert space after comma if followed by letter
+            elif char == ',' and next_char.isalpha():
+                result.append(' ')
+        
+        i += 1
+    
+    return ''.join(result)
 
 
 def _extract_with_words(pdf_path: str) -> str:

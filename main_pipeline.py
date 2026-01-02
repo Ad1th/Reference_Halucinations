@@ -23,7 +23,7 @@ from extraction.extractMetadata import extract_references_metadata
 from extraction.pdfplumber_extract import extract_references_text, extract_titles_with_regex
 from verification.dblp import verify_title_with_dblp, classify_reference, query_dblp, extract_candidates, title_similarity, SIMILARITY_THRESHOLD
 from verification.utils import compare_author_lists, compare_years
-from verification.gemini import gemini_metadata_match, gemini_extract_titles_from_text, gemini_verify_reference_exists
+from verification.gemini import gemini_metadata_match, gemini_extract_titles_from_text, gemini_verify_reference_exists, gemini_batch_verify
 
 
 SORT_ORDER = {
@@ -124,11 +124,12 @@ def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple
     grobid_refs = extract_references_metadata(xml)
     report.write(f"Extracted {len(grobid_refs)} references")
     
-    # Verify each
+    # Verify each - pass authors for better matching on short titles
     results = []
     for i, ref in enumerate(grobid_refs, 1):
         title = ref["title"]
-        dblp_result = verify_title_with_dblp(title)
+        authors = ref.get("authors", [])
+        dblp_result = verify_title_with_dblp(title, authors)
         dblp_result = classify_reference(dblp_result)
         
         combined = {
@@ -170,6 +171,8 @@ def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple
 def step2_author_matching(results: List[Dict], report: VerificationReport) -> List[Dict]:
     """
     Step 2: Apply author name matching to boost/adjust confidence.
+    This applies to ALL references with DBLP matches, including SUSPICIOUS ones.
+    For UNVERIFIED refs (no DBLP result), retry the query as it may have failed due to network issues.
     """
     report.section("STEP 2: AUTHOR NAME MATCHING")
     
@@ -180,6 +183,32 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
         grobid = r["grobid"]
         dblp = r["dblp_verification"]
         dblp_meta = dblp.get("dblp_metadata")
+        
+        # For UNVERIFIED refs, retry DBLP query (may have failed due to network/rate limit)
+        if not dblp_meta and old_label == "UNVERIFIED":
+            title = grobid.get("title", "")
+            authors = grobid.get("authors", [])
+            if title:
+                retry_result = verify_title_with_dblp(title, authors)
+                retry_result = classify_reference(retry_result)
+                if retry_result.get("dblp_metadata"):
+                    # Update the reference with new result
+                    r["dblp_verification"] = retry_result
+                    dblp = retry_result
+                    dblp_meta = retry_result.get("dblp_metadata")
+                    # If the retry found a match with high confidence, update label
+                    if retry_result["status"] == "FOUND":
+                        r["final_label"] = retry_result["final_label"]
+                        r["final_confidence"] = retry_result["confidence"]
+                        report.track_change(
+                            r["ref_num"],
+                            title,
+                            old_label,
+                            retry_result["final_label"],
+                            f"DBLP retry successful - Confidence: {retry_result['confidence']:.3f}"
+                        )
+                        old_label = retry_result["final_label"]
+                        old_conf = retry_result["confidence"]
         
         if not dblp_meta:
             continue
@@ -201,14 +230,22 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
         r["year_match_score"] = round(year_score, 3)
         
         # Adjust confidence based on metadata matching
-        # New confidence = title_conf * 0.6 + author_conf * 0.3 + year_conf * 0.1
+        # For SUSPICIOUS refs with good author match, weight authors more heavily
         title_conf = dblp["confidence"]
-        adjusted_conf = title_conf * 0.6 + author_score * 0.3 + year_score * 0.1
+        
+        # If title confidence is low but authors match well, trust the author match more
+        if title_conf < 0.5 and author_score >= 0.8:
+            # Weight: title 30%, authors 50%, year 20%
+            adjusted_conf = title_conf * 0.3 + author_score * 0.5 + year_score * 0.2
+        else:
+            # Standard weight: title 60%, authors 30%, year 10%
+            adjusted_conf = title_conf * 0.6 + author_score * 0.3 + year_score * 0.1
         
         r["final_confidence"] = round(adjusted_conf, 3)
         
         # Reclassify based on adjusted confidence
-        if adjusted_conf >= 0.7 and old_label in ["REVIEW", "UNVERIFIED"]:
+        # SUSPICIOUS refs with good metadata match should be promoted
+        if adjusted_conf >= 0.7 and old_label in ["REVIEW", "UNVERIFIED", "SUSPICIOUS"]:
             r["final_label"] = "VERIFIED"
             report.track_change(
                 r["ref_num"], 
@@ -216,6 +253,16 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
                 old_label, 
                 "VERIFIED",
                 f"Author match: {author_score:.2f}, Year match: {year_score:.2f}, Adjusted conf: {adjusted_conf:.3f}"
+            )
+        elif adjusted_conf >= 0.5 and old_label == "SUSPICIOUS":
+            # Promote SUSPICIOUS to REVIEW if metadata partially matches
+            r["final_label"] = "REVIEW"
+            report.track_change(
+                r["ref_num"],
+                grobid["title"],
+                old_label,
+                "REVIEW",
+                f"Partial metadata match - Author: {author_score:.2f}, Year: {year_score:.2f}"
             )
         elif adjusted_conf < 0.5 and old_label == "VERIFIED":
             # Demote if metadata doesn't match well
@@ -252,6 +299,15 @@ def step3_regex_reextraction(pdf_path: str, results: List[Dict], report: Verific
     # Extract raw text
     try:
         raw_text = extract_references_text(pdf_path)
+        
+        # Check if the PDF has spacing issues (text extracted without spaces)
+        # This happens with some PDF encodings
+        if raw_text and _pdf_has_spacing_issues(raw_text):
+            report.write("WARNING: PDF has encoding issues - text extracted without proper word spacing.")
+            report.write("Skipping regex re-extraction as it cannot improve on GROBID results.")
+            print_statistics(report, results, "POST-REGEX SUMMARY (SKIPPED)")
+            return results
+        
         regex_titles = extract_titles_with_regex(raw_text)
         report.write(f"Extracted {len(regex_titles)} titles via regex")
     except Exception as e:
@@ -306,110 +362,157 @@ def step3_regex_reextraction(pdf_path: str, results: List[Dict], report: Verific
     return results
 
 
-def step4_gemini_metadata_matching(results: List[Dict], report: VerificationReport) -> List[Dict]:
+def _pdf_has_spacing_issues(text: str) -> bool:
     """
-    Step 4: Use Gemini API to verify metadata for references with DBLP matches
-    but not 100% confident.
-    """
-    report.section("STEP 4: GEMINI METADATA MATCHING")
+    Check if PDF text was extracted without proper word spacing.
     
-    # Find references with DBLP metadata but not fully verified
+    This detects PDFs that are encoded in a way that pdfplumber can't extract
+    spaces between words (all text comes out concatenated).
+    """
+    # Sample some lines and check for abnormally long "words" without spaces
+    lines = [l for l in text.split('\n') if len(l) > 30][:50]  # Sample up to 50 lines
+    
+    long_word_count = 0
+    total_words = 0
+    
+    for line in lines:
+        words = line.split()
+        for word in words:
+            total_words += 1
+            # A "word" longer than 30 chars with mixed case or all lowercase is likely concatenated
+            if len(word) > 30:
+                # Check if it has lowercase letters (not just an acronym or URL)
+                if any(c.islower() for c in word) and not word.startswith('http'):
+                    long_word_count += 1
+    
+    # If more than 2% of "words" are abnormally long, the PDF has spacing issues
+    # This is a conservative threshold - even a few concatenated words indicates problems
+    if total_words > 0 and long_word_count / total_words > 0.02:
+        return True
+    
+    return False
+
+
+def step4_gemini_batch_verification(results: List[Dict], report: VerificationReport) -> List[Dict]:
+    """
+    Step 4: Use Gemini API in BATCH mode to verify remaining unverified references.
+    Sends all references at once to avoid rate limiting.
+    """
+    report.section("STEP 4: GEMINI BATCH VERIFICATION")
+    
+    # Find all remaining unverified/suspicious references
     candidates = [r for r in results 
-                  if r["final_label"] in ["REVIEW", "UNVERIFIED"] 
-                  and r["dblp_verification"].get("dblp_metadata")]
+                  if r["final_label"] in ["REVIEW", "UNVERIFIED", "SUSPICIOUS"]]
     
     if not candidates:
-        report.write("No candidates for Gemini metadata matching.")
+        report.write("No candidates for Gemini verification.")
         return results
     
-    report.write(f"Processing {len(candidates)} references with Gemini...")
+    report.write(f"Processing {len(candidates)} references with Gemini (batch mode)...")
     
+    # Build batch request
+    batch_data = []
     for r in candidates:
+        grobid = r["grobid"]
+        dblp_meta = r["dblp_verification"].get("dblp_metadata")
+        
+        batch_data.append({
+            "ref_num": r["ref_num"],
+            "grobid_title": grobid["title"],
+            "grobid_authors": grobid.get("authors", []),
+            "grobid_year": grobid.get("year"),
+            "dblp_title": dblp_meta.get("title") if dblp_meta else None,
+            "dblp_authors": dblp_meta.get("authors", []) if dblp_meta else [],
+            "dblp_year": dblp_meta.get("year") if dblp_meta else None,
+            "current_confidence": r["final_confidence"]
+        })
+    
+    # Call Gemini with batch
+    try:
+        batch_results = gemini_batch_verify(batch_data)
+    except Exception as e:
+        report.write(f"Gemini batch verification failed: {e}")
+        return results
+    
+    # Process results
+    for r in candidates:
+        ref_num = r["ref_num"]
+        gemini_result = batch_results.get(ref_num, {})
+        
+        if not gemini_result:
+            continue
+        
         old_label = r["final_label"]
         grobid = r["grobid"]
-        dblp_meta = r["dblp_verification"]["dblp_metadata"]
         
-        report.write(f"\n  [{r['ref_num']}] Checking: {grobid['title'][:50]}...")
+        r["gemini_verification"] = gemini_result
         
-        result = gemini_metadata_match(grobid, dblp_meta)
-        r["gemini_match_result"] = result
-        
-        if result.get("match") and result.get("confidence", 0) >= 0.8:
+        if gemini_result.get("verified") and gemini_result.get("confidence", 0) >= 0.7:
             r["final_label"] = "VERIFIED"
-            r["final_confidence"] = max(r["final_confidence"], result["confidence"])
+            r["final_confidence"] = max(r["final_confidence"], gemini_result["confidence"])
+            r["verification_source"] = "gemini"
             report.track_change(
-                r["ref_num"],
+                ref_num,
                 grobid["title"],
                 old_label,
                 "VERIFIED",
-                f"Gemini confirmed match: {result.get('reasoning', 'N/A')}"
+                f"Gemini verified: {gemini_result.get('reasoning', 'N/A')[:60]}"
             )
-        elif result.get("match") is False:
-            report.write(f"    Gemini says NO match: {result.get('reasoning', 'N/A')}")
+        elif gemini_result.get("exists") is False:
+            if old_label != "SUSPICIOUS":
+                r["final_label"] = "SUSPICIOUS"
+                report.track_change(
+                    ref_num,
+                    grobid["title"],
+                    old_label,
+                    "SUSPICIOUS",
+                    f"Gemini: reference may not exist"
+                )
     
-    report.report_changes("Gemini Metadata Matching")
-    print_statistics(report, results, "POST-GEMINI METADATA SUMMARY")
+    report.report_changes("Gemini Batch Verification")
+    print_statistics(report, results, "POST-GEMINI SUMMARY")
     
     return results
 
 
-def step5_gemini_verification(pdf_path: str, results: List[Dict], report: VerificationReport) -> List[Dict]:
+def step5_final_summary(results: List[Dict], report: VerificationReport) -> List[Dict]:
     """
-    Step 5: Final fallback - use pdfplumber + Gemini for completely unverified references.
+    Step 5: Final summary - no more API calls, just summarize remaining issues.
     """
-    report.section("STEP 5: GEMINI REFERENCE VERIFICATION (Final Fallback)")
+    report.section("STEP 5: FINAL ANALYSIS")
     
     # Get remaining unverified
-    unverified = [r for r in results if r["final_label"] in ["UNVERIFIED", "SUSPICIOUS"]]
+    unverified = [r for r in results if r["final_label"] == "UNVERIFIED"]
+    suspicious = [r for r in results if r["final_label"] == "SUSPICIOUS"]
+    review = [r for r in results if r["final_label"] == "REVIEW"]
     
-    if not unverified:
-        report.write("No remaining UNVERIFIED/SUSPICIOUS references.")
-        return results
+    if unverified:
+        report.write(f"\nUNVERIFIED ({len(unverified)} references):")
+        report.write("These references could not be found in DBLP. Possible reasons:")
+        report.write("  - Published in non-CS venues (medical journals, physics, etc.)")
+        report.write("  - Very recent publications not yet indexed")
+        report.write("  - Books, technical reports, or theses")
+        report.write("  - Potentially hallucinated references")
+        for r in unverified:
+            report.write(f"\n  [{r['ref_num']}] {r['grobid']['title'][:70]}...")
+            if r['grobid'].get('authors'):
+                report.write(f"       Authors: {', '.join(r['grobid']['authors'][:3])}")
     
-    report.write(f"Processing {len(unverified)} unverified references with Gemini...")
+    if suspicious:
+        report.write(f"\nSUSPICIOUS ({len(suspicious)} references):")
+        report.write("These had partial DBLP matches but metadata didn't align well:")
+        for r in suspicious:
+            report.write(f"\n  [{r['ref_num']}] {r['grobid']['title'][:70]}")
+            report.write(f"       Confidence: {r['final_confidence']:.3f}")
+            if r.get('author_match_score'):
+                report.write(f"       Author match: {r['author_match_score']:.2f}, Year match: {r.get('year_match_score', 0):.2f}")
     
-    # Extract raw text for context
-    try:
-        raw_text = extract_references_text(pdf_path)
-    except:
-        raw_text = None
+    if review:
+        report.write(f"\nREVIEW ({len(review)} references):")
+        report.write("These need manual verification:")
+        for r in review:
+            report.write(f"\n  [{r['ref_num']}] {r['grobid']['title'][:70]}")
     
-    for r in unverified:
-        old_label = r["final_label"]
-        grobid = r["grobid"]
-        
-        report.write(f"\n  [{r['ref_num']}] Verifying: {grobid['title'][:50]}...")
-        
-        # Ask Gemini if this reference exists
-        result = gemini_verify_reference_exists(
-            grobid["title"],
-            grobid.get("authors", []),
-            grobid.get("year")
-        )
-        
-        r["gemini_verification"] = result
-        
-        if result.get("exists") is True and result.get("confidence", 0) >= 0.8:
-            r["final_label"] = "VERIFIED"
-            r["final_confidence"] = result["confidence"]
-            r["verification_source"] = "gemini"
-            report.track_change(
-                r["ref_num"],
-                grobid["title"],
-                old_label,
-                "VERIFIED",
-                f"Gemini verified: {result.get('reasoning', 'N/A')}"
-            )
-            
-            # Store corrected metadata if provided
-            if result.get("corrected_metadata"):
-                r["gemini_metadata"] = result["corrected_metadata"]
-        
-        elif result.get("exists") is False:
-            r["final_label"] = "SUSPICIOUS"
-            report.write(f"    Gemini says reference may not exist: {result.get('reasoning', 'N/A')}")
-    
-    report.report_changes("Gemini Reference Verification")
     print_statistics(report, results, "FINAL SUMMARY")
     
     return results
@@ -446,10 +549,11 @@ def main():
         report.section("STEP 3: SKIPPED (--skip-regex)")
     
     if not args.skip_gemini:
-        results = step4_gemini_metadata_matching(results, report)
-        results = step5_gemini_verification(pdf_path, results, report)
+        results = step4_gemini_batch_verification(results, report)
     else:
-        report.section("STEP 4 & 5: SKIPPED (--skip-gemini)")
+        report.section("STEP 4: SKIPPED (--skip-gemini)")
+    
+    results = step5_final_summary(results, report)
     
     # Final sorted output
     results.sort(key=lambda r: SORT_ORDER[r["final_label"]])

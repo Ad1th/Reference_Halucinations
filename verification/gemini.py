@@ -250,6 +250,86 @@ Respond ONLY with valid JSON:
         return {"exists": "unknown", "confidence": 0.0, "corrected_metadata": None, "reasoning": f"Parse error: {response[:200]}"}
 
 
+def gemini_batch_verify(references: List[Dict]) -> Dict[int, Dict]:
+    """
+    Verify multiple references in a single Gemini call to avoid rate limiting.
+    
+    Args:
+        references: List of dicts with ref_num, grobid_title, grobid_authors, 
+                   grobid_year, dblp_title, dblp_authors, dblp_year, current_confidence
+    
+    Returns:
+        Dict mapping ref_num to verification result
+    """
+    if not references:
+        return {}
+    
+    # Build the reference list for the prompt
+    refs_text = ""
+    for i, ref in enumerate(references, 1):
+        refs_text += f"""
+Reference #{ref['ref_num']}:
+  PDF Title: {ref['grobid_title']}
+  PDF Authors: {', '.join(ref['grobid_authors']) if ref['grobid_authors'] else 'N/A'}
+  PDF Year: {ref['grobid_year'] or 'N/A'}
+"""
+        if ref.get('dblp_title'):
+            refs_text += f"""  DBLP Match Title: {ref['dblp_title']}
+  DBLP Authors: {', '.join(ref['dblp_authors']) if ref['dblp_authors'] else 'N/A'}
+  DBLP Year: {ref['dblp_year'] or 'N/A'}
+  Current Confidence: {ref['current_confidence']:.3f}
+"""
+        else:
+            refs_text += "  (No DBLP match found)\n"
+    
+    prompt = f"""Analyze these academic references and verify if they are real publications.
+
+For references WITH a DBLP match: Determine if the PDF reference and DBLP match refer to the SAME publication.
+For references WITHOUT a DBLP match: Determine if the reference appears to be a real publication (may be from non-CS venues, books, etc.)
+
+{refs_text}
+
+For EACH reference, provide:
+1. verified: true if you're confident this is a real, correctly matched publication
+2. exists: true/false if the publication exists at all (use false only if likely hallucinated)
+3. confidence: 0.0-1.0 
+4. reasoning: brief explanation
+
+Be GENEROUS with verification for references that have matching DBLP data - small title variations, author name differences (initials, middle names), and year differences of 1-2 years are normal.
+
+Respond with a JSON object mapping ref_num to result:
+{{
+  "1": {{"verified": true/false, "exists": true/false, "confidence": 0.9, "reasoning": "Authors and title match well"}},
+  "2": {{"verified": false, "exists": true, "confidence": 0.5, "reasoning": "Title similar but authors don't match"}},
+  ...
+}}
+
+ONLY output valid JSON, no explanation outside the JSON.
+"""
+    
+    response = call_gemini(prompt, max_tokens=4096)
+    
+    if not response:
+        return {}
+    
+    try:
+        json_str = response.strip()
+        if json_str.startswith("```"):
+            json_str = json_str.split("```")[1]
+            if json_str.startswith("json"):
+                json_str = json_str[4:]
+        json_str = json_str.strip()
+        
+        result = json.loads(json_str)
+        
+        # Convert string keys to int
+        return {int(k): v for k, v in result.items()}
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Failed to parse Gemini batch response: {e}")
+        print(f"Response was: {response[:500]}")
+        return {}
+
+
 if __name__ == "__main__":
     # Quick test
     test_grobid = {

@@ -1,7 +1,7 @@
 # Queries DBLP API for publication metadata; gets titles from checker.py and sends candidate matches back [Verification logic integration pending].
 #updating this to get titles from extractTitles, which are extracted from the XML using BeautifulSoup, which is extracted from the PDF using GROBID.
 import requests
-from typing import List, Dict
+from typing import List, Dict, Optional
 from verification.utils import clean_title
 from difflib import SequenceMatcher
 
@@ -10,8 +10,21 @@ AMBIGUITY_GAP = 0.05
 
 DBLP_API_URL = "https://dblp.org/search/publ/api"
 
-def query_dblp(title: str) -> dict:
-    params = {"q": title, "format": "json", "h": 5}
+def query_dblp(title: str, num_results: int = 5) -> dict:
+    params = {"q": title, "format": "json", "h": num_results}
+    headers = {"User-Agent": "HalluciCheck/0.1"}
+    try:
+        response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
+        return response.json() if response.status_code == 200 else {}
+    except:
+        return {}
+
+
+def query_dblp_with_author(title: str, author: str, num_results: int = 10) -> dict:
+    """Query DBLP with title and author name for better matching."""
+    # Try combining title and author in query
+    query = f"{title} {author}"
+    params = {"q": query, "format": "json", "h": num_results}
     headers = {"User-Agent": "HalluciCheck/0.1"}
     try:
         response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
@@ -59,20 +72,57 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def verify_title_with_dblp(title: str) -> Dict:
+def author_overlap_score(authors1: List[str], authors2: List[str]) -> float:
+    """Calculate author overlap between two author lists."""
+    if not authors1 or not authors2:
+        return 0.0
+    
+    # Normalize author names (last name only, lowercase)
+    def normalize(name: str) -> str:
+        # Handle "Firstname Lastname" or "Lastname, Firstname"
+        parts = name.replace(',', ' ').split()
+        # Take the last word as surname (simplified)
+        return parts[-1].lower() if parts else ""
+    
+    norm1 = set(normalize(a) for a in authors1 if a)
+    norm2 = set(normalize(a) for a in authors2 if a)
+    
+    if not norm1 or not norm2:
+        return 0.0
+    
+    overlap = len(norm1 & norm2)
+    return overlap / max(len(norm1), len(norm2))
+
+
+def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> Dict:
     """
     Verifies whether a title exists in DBLP.
+    If authors are provided, uses them to improve matching for short/ambiguous titles.
 
     Returns:
     {
         input_title,
-        status: FOUND | NOT_FOUND | AMBIGUOUS,
+        status: FOUND | NOT_FOUND | LOW_CONFIDENCE | AMBIGUOUS,
         confidence,
         dblp_metadata: {title, authors, year, venue, type, doi, url, pages, volume}
     }
     """
-    dblp_response = query_dblp(normalize_query(title))
+    # First try title-only search
+    dblp_response = query_dblp(normalize_query(title), num_results=10)
     candidates = extract_candidates(dblp_response)
+    
+    # Also search with author if we have authors (helps with common/short titles)
+    # This catches cases where title alone returns wrong papers
+    if authors:
+        first_author = authors[0].split()[-1] if authors else ""  # Last name
+        if first_author:
+            author_response = query_dblp_with_author(title, first_author, num_results=10)
+            author_candidates = extract_candidates(author_response)
+            # Merge candidates, avoiding duplicates
+            existing_titles = {c["title"].lower() for c in candidates}
+            for c in author_candidates:
+                if c["title"].lower() not in existing_titles:
+                    candidates.append(c)
 
     if not candidates:
         return {
@@ -82,40 +132,58 @@ def verify_title_with_dblp(title: str) -> Dict:
             "dblp_metadata": None
         }
 
+    # Score candidates by both title similarity AND author overlap
     scored = []
     for c in candidates:
-        base = title_similarity(title, c["title"])
+        title_score = title_similarity(title, c["title"])
         penalty = length_penalty(title)
-        score = base * penalty
-        scored.append((score, c))
+        base_score = title_score * penalty
+        
+        # If we have authors, factor in author matching
+        if authors and c.get("authors"):
+            author_score = author_overlap_score(authors, c["authors"])
+            # Combined score: weighted average
+            # For short titles, weight author more heavily
+            if len(title.split()) <= 4:
+                combined = base_score * 0.4 + author_score * 0.6
+            else:
+                combined = base_score * 0.7 + author_score * 0.3
+            scored.append((combined, base_score, author_score, c))
+        else:
+            scored.append((base_score, base_score, 0.0, c))
 
     scored.sort(reverse=True, key=lambda x: x[0])
-    best_score, best_match = scored[0]
+    best_combined, best_title_score, best_author_score, best_match = scored[0]
 
-    if best_score < SIMILARITY_THRESHOLD:
+    # Use combined score for threshold check
+    if best_combined < SIMILARITY_THRESHOLD:
+        # Still include metadata for author matching - low title similarity
+        # might still be the right paper (short titles, abbreviations, etc.)
         return {
             "input_title": title,
-            "status": "NOT_FOUND",
-            "confidence": round(best_score, 3),
-            "dblp_metadata": None
+            "status": "LOW_CONFIDENCE",
+            "confidence": round(best_combined, 3),
+            "title_similarity": round(best_title_score, 3),
+            "author_similarity": round(best_author_score, 3),
+            "dblp_metadata": best_match  # ALWAYS include for author matching
         }
 
     # Ambiguity check
     if len(scored) > 1:
-        second_score = scored[1][0]
-        if abs(best_score - second_score) < AMBIGUITY_GAP:
+        second_combined = scored[1][0]
+        if abs(best_combined - second_combined) < AMBIGUITY_GAP:
             return {
                 "input_title": title,
                 "status": "AMBIGUOUS",
-                "confidence": round(best_score, 3),
-                "candidates": [c["title"] for _, c in scored[:2]],
+                "confidence": round(best_combined, 3),
+                "candidates": [c["title"] for _, _, _, c in scored[:2]],
                 "dblp_metadata": best_match  # Include best match metadata
             }
 
     return {
         "input_title": title,
         "status": "FOUND",
-        "confidence": round(best_score, 3),
+        "confidence": round(best_combined, 3),
         "matched_title": best_match["title"],
         "year": best_match.get("year"),
         "dblp_metadata": best_match  # Full metadata from DBLP
@@ -156,12 +224,17 @@ def classify_reference(result: Dict) -> Dict:
     elif result["status"] == "AMBIGUOUS":
         result["final_label"] = "REVIEW"
 
-    else:  # NOT_FOUND
+    elif result["status"] == "LOW_CONFIDENCE":
+        # Has a DBLP candidate but low title similarity
+        # Will be processed by author matching later
         if words <= 4:
             result["final_label"] = "SUSPICIOUS"
-        elif conf < 0.4:
-            result["final_label"] = "UNVERIFIED"
+        elif conf > 0.3:
+            result["final_label"] = "REVIEW"  # Some chance it's correct
         else:
-            result["final_label"] = "UNVERIFIED"
+            result["final_label"] = "SUSPICIOUS"
+
+    else:  # NOT_FOUND - no candidates at all
+        result["final_label"] = "UNVERIFIED"
 
     return result
