@@ -20,15 +20,36 @@ def query_dblp(title: str) -> dict:
         return {}
 
 def extract_candidates(dblp_response: dict) -> list:
+    """Extract candidate matches from DBLP response with full metadata."""
     candidates = []
     hits = dblp_response.get("result", {}).get("hits", {}).get("hit", [])
     if isinstance(hits, dict): hits = [hits]
     for hit in hits:
         info = hit.get("info", {})
+        
+        # Extract authors - can be a list or single dict
+        authors_data = info.get("authors", {}).get("author", [])
+        if isinstance(authors_data, dict):
+            authors_data = [authors_data]
+        
+        # Normalize author format - can be string or dict with "text" key
+        authors = []
+        for a in authors_data:
+            if isinstance(a, str):
+                authors.append(a)
+            elif isinstance(a, dict):
+                authors.append(a.get("text", ""))
+        
         candidates.append({
             "title": clean_title(info.get("title")),
-            "authors": info.get("authors", {}).get("author", []),
-            "year": info.get("year")
+            "authors": authors,
+            "year": info.get("year"),
+            "venue": info.get("venue"),
+            "type": info.get("type"),  # e.g., "Conference and Workshop Papers"
+            "doi": info.get("doi"),
+            "url": info.get("url"),
+            "pages": info.get("pages"),
+            "volume": info.get("volume")
         })
     return candidates
 
@@ -47,8 +68,7 @@ def verify_title_with_dblp(title: str) -> Dict:
         input_title,
         status: FOUND | NOT_FOUND | AMBIGUOUS,
         confidence,
-        matched_title,
-        year
+        dblp_metadata: {title, authors, year, venue, type, doi, url, pages, volume}
     }
     """
     dblp_response = query_dblp(normalize_query(title))
@@ -58,7 +78,8 @@ def verify_title_with_dblp(title: str) -> Dict:
         return {
             "input_title": title,
             "status": "NOT_FOUND",
-            "confidence": 0.0
+            "confidence": 0.0,
+            "dblp_metadata": None
         }
 
     scored = []
@@ -75,7 +96,8 @@ def verify_title_with_dblp(title: str) -> Dict:
         return {
             "input_title": title,
             "status": "NOT_FOUND",
-            "confidence": round(best_score, 3)
+            "confidence": round(best_score, 3),
+            "dblp_metadata": None
         }
 
     # Ambiguity check
@@ -86,7 +108,8 @@ def verify_title_with_dblp(title: str) -> Dict:
                 "input_title": title,
                 "status": "AMBIGUOUS",
                 "confidence": round(best_score, 3),
-                "candidates": [c["title"] for _, c in scored[:2]]
+                "candidates": [c["title"] for _, c in scored[:2]],
+                "dblp_metadata": best_match  # Include best match metadata
             }
 
     return {
@@ -94,7 +117,8 @@ def verify_title_with_dblp(title: str) -> Dict:
         "status": "FOUND",
         "confidence": round(best_score, 3),
         "matched_title": best_match["title"],
-        "year": best_match.get("year")
+        "year": best_match.get("year"),
+        "dblp_metadata": best_match  # Full metadata from DBLP
     }
 
 def normalize_query(title: str) -> str:
