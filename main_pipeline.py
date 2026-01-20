@@ -29,8 +29,7 @@ from verification.gemini import gemini_metadata_match, gemini_extract_titles_fro
 SORT_ORDER = {
     "VERIFIED": 0,
     "REVIEW": 1,
-    "UNVERIFIED": 2,
-    "SUSPICIOUS": 3
+    "UNVERIFIED": 2
 }
 
 
@@ -95,7 +94,7 @@ class VerificationReport:
 def print_statistics(report: VerificationReport, results: List[Dict], title: str = "SUMMARY"):
     """Print verification statistics."""
     total = len(results)
-    stats = {"VERIFIED": 0, "REVIEW": 0, "UNVERIFIED": 0, "SUSPICIOUS": 0}
+    stats = {"VERIFIED": 0, "REVIEW": 0, "UNVERIFIED": 0}
     
     for r in results:
         label = r.get("final_label") or r.get("dblp_verification", {}).get("final_label", "UNKNOWN")
@@ -108,7 +107,6 @@ def print_statistics(report: VerificationReport, results: List[Dict], title: str
     report.write(f"✓ VERIFIED:   {stats['VERIFIED']:3d}  ({100*stats['VERIFIED']/total:.1f}%)")
     report.write(f"? REVIEW:     {stats['REVIEW']:3d}  ({100*stats['REVIEW']/total:.1f}%)")
     report.write(f"✗ UNVERIFIED: {stats['UNVERIFIED']:3d}  ({100*stats['UNVERIFIED']/total:.1f}%)")
-    report.write(f"⚠ SUSPICIOUS: {stats['SUSPICIOUS']:3d}  ({100*stats['SUSPICIOUS']/total:.1f}%)")
 
 
 def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple[str, List[Dict]]:
@@ -171,8 +169,8 @@ def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple
 def step2_author_matching(results: List[Dict], report: VerificationReport) -> List[Dict]:
     """
     Step 2: Apply author name matching to boost/adjust confidence.
-    This applies to ALL references with DBLP matches, including SUSPICIOUS ones.
-    For UNVERIFIED refs (no DBLP result), retry the query as it may have failed due to network issues.
+    This applies to ALL references with DBLP matches.
+    For UNVERIFIED refs (no DBLP result), retry the query.
     """
     report.section("STEP 2: AUTHOR NAME MATCHING")
     
@@ -183,32 +181,38 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
         grobid = r["grobid"]
         dblp = r["dblp_verification"]
         dblp_meta = dblp.get("dblp_metadata")
+
+
+
+
+        # # For UNVERIFIED refs, retry DBLP query (may have failed due to network/rate limit)
+        # if not dblp_meta and old_label == "UNVERIFIED":
+        #     title = grobid.get("title", "")
+        #     authors = grobid.get("authors", [])
+        #     if title:
+        #         retry_result = verify_title_with_dblp(title, authors)
+        #         retry_result = classify_reference(retry_result)
+        #         if retry_result.get("dblp_metadata"):
+        #             # Update the reference with new result
+        #             r["dblp_verification"] = retry_result
+        #             dblp = retry_result
+        #             dblp_meta = retry_result.get("dblp_metadata")
+        #             # If the retry found a match with high confidence, update label
+        #             if retry_result["status"] == "FOUND":
+        #                 r["final_label"] = retry_result["final_label"]
+        #                 r["final_confidence"] = retry_result["confidence"]
+        #                 report.track_change(
+        #                     r["ref_num"],
+        #                     title,
+        #                     old_label,
+        #                     retry_result["final_label"],
+        #                     f"DBLP retry successful - Confidence: {retry_result['confidence']:.3f}"
+        #                 )
+        #                 old_label = retry_result["final_label"]
+        #                 old_conf = retry_result["confidence"]
         
-        # For UNVERIFIED refs, retry DBLP query (may have failed due to network/rate limit)
-        if not dblp_meta and old_label == "UNVERIFIED":
-            title = grobid.get("title", "")
-            authors = grobid.get("authors", [])
-            if title:
-                retry_result = verify_title_with_dblp(title, authors)
-                retry_result = classify_reference(retry_result)
-                if retry_result.get("dblp_metadata"):
-                    # Update the reference with new result
-                    r["dblp_verification"] = retry_result
-                    dblp = retry_result
-                    dblp_meta = retry_result.get("dblp_metadata")
-                    # If the retry found a match with high confidence, update label
-                    if retry_result["status"] == "FOUND":
-                        r["final_label"] = retry_result["final_label"]
-                        r["final_confidence"] = retry_result["confidence"]
-                        report.track_change(
-                            r["ref_num"],
-                            title,
-                            old_label,
-                            retry_result["final_label"],
-                            f"DBLP retry successful - Confidence: {retry_result['confidence']:.3f}"
-                        )
-                        old_label = retry_result["final_label"]
-                        old_conf = retry_result["confidence"]
+        # For UNVERIFIED refs, we rely on Step 1. Retrying here is redundant and risks rate limits.
+        # We only process if we already have metadata from Step 1.
         
         if not dblp_meta:
             continue
@@ -244,8 +248,7 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
         r["final_confidence"] = round(adjusted_conf, 3)
         
         # Reclassify based on adjusted confidence
-        # SUSPICIOUS refs with good metadata match should be promoted
-        if adjusted_conf >= 0.7 and old_label in ["REVIEW", "UNVERIFIED", "SUSPICIOUS"]:
+        if adjusted_conf >= 0.7 and old_label in ["REVIEW", "UNVERIFIED"]:
             r["final_label"] = "VERIFIED"
             report.track_change(
                 r["ref_num"], 
@@ -254,8 +257,8 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
                 "VERIFIED",
                 f"Author match: {author_score:.2f}, Year match: {year_score:.2f}, Adjusted conf: {adjusted_conf:.3f}"
             )
-        elif adjusted_conf >= 0.5 and old_label == "SUSPICIOUS":
-            # Promote SUSPICIOUS to REVIEW if metadata partially matches
+        elif adjusted_conf >= 0.5 and old_label == "UNVERIFIED":
+            # Promote UNVERIFIED (with metadata) to REVIEW if metadata partially matches
             r["final_label"] = "REVIEW"
             report.track_change(
                 r["ref_num"],
@@ -283,15 +286,15 @@ def step2_author_matching(results: List[Dict], report: VerificationReport) -> Li
 
 def step3_regex_reextraction(pdf_path: str, results: List[Dict], report: VerificationReport) -> List[Dict]:
     """
-    Step 3: Try regex-based title extraction for UNVERIFIED/SUSPICIOUS references.
+    Step 3: Try regex-based title extraction for UNVERIFIED references.
     """
-    report.section("STEP 3: REGEX RE-EXTRACTION FOR UNVERIFIED/SUSPICIOUS")
+    report.section("STEP 3: REGEX RE-EXTRACTION FOR UNVERIFIED")
     
     # Get problematic references
-    problematic = [r for r in results if r["final_label"] in ["UNVERIFIED", "SUSPICIOUS"]]
+    problematic = [r for r in results if r["final_label"] == "UNVERIFIED"]
     
     if not problematic:
-        report.write("No UNVERIFIED or SUSPICIOUS references to process.")
+        report.write("No UNVERIFIED references to process.")
         return results
     
     report.write(f"Found {len(problematic)} problematic references")
@@ -400,9 +403,9 @@ def step4_gemini_batch_verification(results: List[Dict], report: VerificationRep
     """
     report.section("STEP 4: GEMINI BATCH VERIFICATION")
     
-    # Find all remaining unverified/suspicious references
+    # Find all remaining unverified references
     candidates = [r for r in results 
-                  if r["final_label"] in ["REVIEW", "UNVERIFIED", "SUSPICIOUS"]]
+                  if r["final_label"] in ["REVIEW", "UNVERIFIED"]]
     
     if not candidates:
         report.write("No candidates for Gemini verification.")
@@ -459,15 +462,8 @@ def step4_gemini_batch_verification(results: List[Dict], report: VerificationRep
                 f"Gemini verified: {gemini_result.get('reasoning', 'N/A')[:60]}"
             )
         elif gemini_result.get("exists") is False:
-            if old_label != "SUSPICIOUS":
-                r["final_label"] = "SUSPICIOUS"
-                report.track_change(
-                    ref_num,
-                    grobid["title"],
-                    old_label,
-                    "SUSPICIOUS",
-                    f"Gemini: reference may not exist"
-                )
+             # If explicit non-existence, keep as UNVERIFIED (or flag specifically if needed)
+             pass
     
     report.report_changes("Gemini Batch Verification")
     print_statistics(report, results, "POST-GEMINI SUMMARY")
@@ -483,7 +479,6 @@ def step5_final_summary(results: List[Dict], report: VerificationReport) -> List
     
     # Get remaining unverified
     unverified = [r for r in results if r["final_label"] == "UNVERIFIED"]
-    suspicious = [r for r in results if r["final_label"] == "SUSPICIOUS"]
     review = [r for r in results if r["final_label"] == "REVIEW"]
     
     if unverified:
@@ -498,14 +493,14 @@ def step5_final_summary(results: List[Dict], report: VerificationReport) -> List
             if r['grobid'].get('authors'):
                 report.write(f"       Authors: {', '.join(r['grobid']['authors'][:3])}")
     
-    if suspicious:
-        report.write(f"\nSUSPICIOUS ({len(suspicious)} references):")
-        report.write("These had partial DBLP matches but metadata didn't align well:")
-        for r in suspicious:
-            report.write(f"\n  [{r['ref_num']}] {r['grobid']['title'][:70]}")
-            report.write(f"       Confidence: {r['final_confidence']:.3f}")
-            if r.get('author_match_score'):
-                report.write(f"       Author match: {r['author_match_score']:.2f}, Year match: {r.get('year_match_score', 0):.2f}")
+    # if suspicious:
+    #     report.write(f"\nSUSPICIOUS ({len(suspicious)} references):")
+    #     report.write("These had partial DBLP matches but metadata didn't align well:")
+    #     for r in suspicious:
+    #         report.write(f"\n  [{r['ref_num']}] {r['grobid']['title'][:70]}")
+    #         report.write(f"       Confidence: {r['final_confidence']:.3f}")
+    #         if r.get('author_match_score'):
+    #             report.write(f"       Author match: {r['author_match_score']:.2f}, Year match: {r.get('year_match_score', 0):.2f}")
     
     if review:
         report.write(f"\nREVIEW ({len(review)} references):")

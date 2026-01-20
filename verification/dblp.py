@@ -1,6 +1,5 @@
-# Queries DBLP API for publication metadata; gets titles from checker.py and sends candidate matches back [Verification logic integration pending].
-#updating this to get titles from extractTitles, which are extracted from the XML using BeautifulSoup, which is extracted from the PDF using GROBID.
 import requests
+import time
 from typing import List, Dict, Optional
 from verification.utils import clean_title, fix_grobid_title_errors
 from difflib import SequenceMatcher
@@ -11,10 +10,17 @@ AMBIGUITY_GAP = 0.05
 DBLP_API_URL = "https://dblp.org/search/publ/api"
 
 def query_dblp(title: str, num_results: int = 5) -> dict:
+    time.sleep(1.0) # Polite rate limiting
     params = {"q": title, "format": "json", "h": num_results}
-    headers = {"User-Agent": "HalluciCheck/0.1"}
+    headers = {"User-Agent": "HalluciCheck/0.1 (mailer@example.com)"} # Added contact info as per DBLP polite policy
     try:
         response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
+        if response.status_code == 429:
+            print("  [DBLP] Rate limited! Sleeping for 5s...")
+            time.sleep(5)
+            # Retry once
+            response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
+        
         return response.json() if response.status_code == 200 else {}
     except:
         return {}
@@ -23,11 +29,18 @@ def query_dblp(title: str, num_results: int = 5) -> dict:
 def query_dblp_with_author(title: str, author: str, num_results: int = 10) -> dict:
     """Query DBLP with title and author name for better matching."""
     # Try combining title and author in query
+    time.sleep(1.0) # Polite rate limiting
     query = f"{title} {author}"
     params = {"q": query, "format": "json", "h": num_results}
-    headers = {"User-Agent": "HalluciCheck/0.1"}
+    headers = {"User-Agent": "HalluciCheck/0.1 (mailer@example.com)"}
     try:
         response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
+        if response.status_code == 429:
+            print("  [DBLP] Rate limited! Sleeping for 5s...")
+            time.sleep(5)
+            # Retry once
+            response = requests.get(DBLP_API_URL, params=params, headers=headers, timeout=10)
+            
         return response.json() if response.status_code == 200 else {}
     except:
         return {}
@@ -236,21 +249,14 @@ def classify_reference(result: Dict) -> Dict:
 
     elif result["status"] == "LOW_CONFIDENCE":
         # Has a DBLP candidate but low title similarity
-        # Will be processed by author matching later
-        if words <= 4:
-            result["final_label"] = "SUSPICIOUS"
-        elif conf > 0.3:
-            result["final_label"] = "REVIEW"  # Some chance it's correct
+        # Map weak matches to UNVERIFIED to be re-checked by author matching or Gemini
+        # Unless confidence is decent (candidate might be correct)
+        if conf > 0.4:
+            result["final_label"] = "REVIEW"
         else:
-            result["final_label"] = "SUSPICIOUS"
+            result["final_label"] = "UNVERIFIED"
 
-    else:  # NOT_FOUND - no candidates at all
+    else:  # NOT_FOUND
         result["final_label"] = "UNVERIFIED"
-
-
-    #for final clssification, club suspicious and unverified into one
-    if result["final_label"] in ["SUSPICIOUS", "UNVERIFIED"]:
-        result["final_label"] = "UNVERIFIED"
-        
 
     return result
