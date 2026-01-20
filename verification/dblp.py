@@ -247,4 +247,10 @@ def classify_reference(result: Dict) -> Dict:
     else:  # NOT_FOUND - no candidates at all
         result["final_label"] = "UNVERIFIED"
 
+
+    #for final clssification, club suspicious and unverified into one
+    if result["final_label"] in ["SUSPICIOUS", "UNVERIFIED"]:
+        result["final_label"] = "UNVERIFIED"
+        
+
     return result
