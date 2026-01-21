@@ -66,41 +66,38 @@ Reference_Halucinations/
 
 ## 🔄 Verification Pipeline
 
-The tool uses a 5-step verification process:
+The verification process follows a multi-stage pipeline designed to minimize false positives while detecting hallucinations. The logic flows from strict API matching to fuzzy metadata comparisons, and finally to AI-based verification if needed.
 
-```
-PDF → GROBID → Step 1: DBLP Title Check → Step 2: Author Matching →
-Step 3: Regex Re-extraction → Step 4: Gemini Verification → Step 5: Final Report
-```
+![Verification Pipeline Flowchart](assets/pipeline_flowchart.png)
 
-### Step 1: Pre-Metadata Check (DBLP Title Matching)
+### Step 1: Title Matching
 
 - Extracts references from PDF via GROBID
 - Queries DBLP API with normalized titles
 - Applies length penalty for short/generic titles
 - Classifies as: VERIFIED, REVIEW, UNVERIFIED, or SUSPICIOUS
 
-### Step 2: Author Name Matching
+### Step 2: Metadata Check (Author & Year)
 
 - For references with DBLP candidates, compares author lists
 - Uses last-name matching with fuzzy comparison
 - Boosts confidence for matching authors/years
 - Re-queries DBLP for UNVERIFIED refs (handles transient failures)
 
-### Step 3: Regex Re-extraction
+### Step 3: Regex Re-extraction (Conditional)
 
-- For UNVERIFIED/SUSPICIOUS references
+- Activated if DBLP match is not found (`UNVERIFIED`)
 - Extracts raw text from PDF using pdfplumber
 - Applies regex patterns to find reference titles
 - Re-verifies against DBLP with corrected titles
 
-### Step 4: Gemini Verification (Optional)
+### Step 4: Gemini Verification (Conditional)
 
-- Sends remaining uncertain references to Gemini API
+- Processed if enabled and references remain `REVIEW` or `UNVERIFIED`
 - Batch processing to avoid rate limiting
 - Returns verification status based on AI analysis
 
-### Step 5: Final Analysis
+### Step 5: Display Results
 
 - Generates comprehensive report with statistics
 - Sorts references by verification status
