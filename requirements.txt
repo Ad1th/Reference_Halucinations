@@ -1,2 +1,5 @@
-pdfplumber
 requests
+beautifulsoup4
+lxml
+pdfplumber
+python-dotenv

@@ -40,28 +40,26 @@ python3 main_pipeline.py data/raw/paper.pdf
 
 ```text
 Reference_Halucinations/
+├── assets/                 # Images and static assets
 ├── data/
-│   ├── raw/                    # Input PDFs
-│   └── output/                 # JSON output files
-├── extraction/                 # Reference extraction modules
-│   ├── extractRefData.py       # Sends PDF to GROBID, returns XML
-│   ├── extractMetadata.py      # Parses XML to extract full metadata
-│   ├── extractTitle.py         # Parses XML to extract paper titles
-│   ├── pdfplumber_extract.py   # Fallback PDF text extraction
-│   └── parser.py               # Reference parsing utilities
-├── verification/               # Verification modules
-│   ├── dblp.py                 # DBLP API queries & classification
-│   ├── gemini.py               # Gemini API for advanced verification
-│   ├── utils.py                # Title cleaning & author matching
-│   ├── checker.py              # Legacy orchestrator
-│   └── verifier.py             # Verification helpers
-├── fluff/                      # Verification reports output
-├── tests/                      # Test suite
+│   ├── raw/                # Input PDFs
+│   └── output/             # JSON output files (if enabled)
+├── extraction/             # Reference extraction modules
+│   ├── extractRefData.py   # Sends PDF to GROBID, returns XML
+│   ├── extractMetadata.py  # Parses XML to extract full metadata
+│   ├── extractTitle.py     # Parses XML to extract paper titles
+│   ├── pdfplumber_extract.py # Fallback PDF text extraction
+│   └── parser.py           # Reference parsing utilities
+├── verification/           # Verification modules
+│   ├── dblp.py             # DBLP API queries & classification
+│   ├── gemini.py           # Gemini API for advanced verification
+│   └── utils.py            # Title cleaning & author matching
+├── fluff/                  # Verification reports output
+├── tests/                  # Test suite
 │   ├── unit/
 │   └── integration/
-├── main_pipeline.py            # Multi-step verification pipeline
-├── main.py                     # Simple entry point (legacy)
-└── requirements.txt            # Project dependencies
+├── main_pipeline.py        # Multi-step verification pipeline (Entry Point)
+└── requirements.txt        # Project dependencies
 ```
 
 ## 🔄 Verification Pipeline
@@ -107,10 +105,9 @@ The verification process follows a multi-stage pipeline designed to minimize fal
 
 | Label        | Description                                                    |
 | ------------ | -------------------------------------------------------------- |
-| `VERIFIED`   | Title found in DBLP with high confidence (≥0.7)                |
-| `REVIEW`     | Ambiguous match - multiple candidates with similar scores      |
-| `UNVERIFIED` | Title not found in DBLP (may be non-CS venue, book, or report) |
-| `SUSPICIOUS` | Low confidence match - metadata doesn't align well             |
+| `VERIFIED`   | High confidence match (Score ≥0.9 OR ≥0.75 with Author Match)  |
+| `REVIEW`     | Medium confidence (Score 0.5-0.9) or Ambiguous match           |
+| `UNVERIFIED` | No match found or Low confidence (Score <0.5)                  |
 
 ## 🛠 Installation
 
@@ -133,7 +130,7 @@ The verification process follows a multi-stage pipeline designed to minimize fal
 - `beautifulsoup4` - XML parsing for GROBID output
 - `lxml` - XML parser backend
 - `pdfplumber` - PDF text extraction for fallback
-- `google-generativeai` - Gemini API client (optional)
+- `python-dotenv` - Environment variable management for Gemini API keys
 
 ## ⚙️ Configuration
 
