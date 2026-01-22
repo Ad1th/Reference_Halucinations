@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from extraction.extractRefData import extract_references_xml
 from extraction.extractMetadata import extract_references_metadata
-from verification.dblp import verify_title_with_dblp, classify_reference
+from verification.dblp import verify_title_with_dblp
 
 SORT_ORDER = {
     "VERIFIED": 0,
@@ -36,7 +36,6 @@ def main():
     for ref in grobid_refs:
         title = ref["title"]
         dblp_result = verify_title_with_dblp(title)
-        dblp_result = classify_reference(dblp_result)
         
         # Combine GROBID metadata + DBLP verification result
         combined = {

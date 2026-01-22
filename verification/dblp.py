@@ -115,7 +115,7 @@ def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> D
     Returns:
     {
         input_title,
-        status: FOUND | NOT_FOUND | LOW_CONFIDENCE | AMBIGUOUS,
+        status: VERIFIED | REVIEW | UNVERIFIED,
         confidence,
         dblp_metadata: {title, authors, year, venue, type, doi, url, pages, volume}
     }
@@ -140,7 +140,7 @@ def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> D
     if not candidates:
         return {
             "input_title": title,
-            "status": "NOT_FOUND",
+            "final_label": "UNVERIFIED",
             "confidence": 0.0,
             "dblp_metadata": None
         }
@@ -177,37 +177,38 @@ def verify_title_with_dblp(title: str, authors: Optional[List[str]] = None) -> D
     best_combined, best_title_score, best_author_score, best_match = scored[0]
 
     # Use combined score for threshold check
-    if best_combined < SIMILARITY_THRESHOLD:
-        # Still include metadata for author matching - low title similarity
-        # might still be the right paper (short titles, abbreviations, etc.)
-        return {
-            "input_title": title,
-            "status": "LOW_CONFIDENCE",
-            "confidence": round(best_combined, 3),
-            "title_similarity": round(best_title_score, 3),
-            "author_similarity": round(best_author_score, 3),
-            "dblp_metadata": best_match  # ALWAYS include for author matching
-        }
-
-    # Ambiguity check
-    if len(scored) > 1:
-        second_combined = scored[1][0]
-        if abs(best_combined - second_combined) < AMBIGUITY_GAP:
-            return {
-                "input_title": title,
-                "status": "AMBIGUOUS",
-                "confidence": round(best_combined, 3),
-                "candidates": [c["title"] for _, _, _, c in scored[:2]],
-                "dblp_metadata": best_match  # Include best match metadata
-            }
+    final_label = "UNVERIFIED"
+    
+    # 1. Strong Match Rule
+    if best_combined >= 0.9:
+        final_label = "VERIFIED"
+    
+    # 2. Good Match with Authors Rule
+    elif best_combined >= 0.75 and best_author_score > 0.5:
+        final_label = "VERIFIED"
+        
+    # 3. Fuzzy Match / Ambiguous Rule
+    elif best_combined >= 0.5:
+        final_label = "REVIEW"
+        if len(scored) > 1:
+            second_combined = scored[1][0]
+            if abs(best_combined - second_combined) < AMBIGUITY_GAP:
+                 # If top two are very close, it's definitely a review case
+                 pass
+    
+    else:
+        # Weak match
+        final_label = "UNVERIFIED"
 
     return {
         "input_title": title,
-        "status": "FOUND",
-        "confidence": round(best_combined, 3),
+        "final_label": final_label,
+        "confidence": round(best_combined, 3), # Kept for UI but not primary logic
+        "title_similarity": round(best_title_score, 3),
+        "author_similarity": round(best_author_score, 3),
         "matched_title": best_match["title"],
         "year": best_match.get("year"),
-        "dblp_metadata": best_match  # Full metadata from DBLP
+        "dblp_metadata": best_match 
     }
 
 def normalize_query(title: str) -> str:
@@ -233,30 +234,4 @@ def length_penalty(title: str) -> float:
     return 1.0
 
 
-def classify_reference(result: Dict) -> Dict:
-    """
-    Assign final reference category.
-    """
-    title = result["input_title"]
-    words = len(title.split())
-    conf = result.get("confidence", 0.0)
-
-    if result["status"] == "FOUND":
-        result["final_label"] = "VERIFIED"
-
-    elif result["status"] == "AMBIGUOUS":
-        result["final_label"] = "REVIEW"
-
-    elif result["status"] == "LOW_CONFIDENCE":
-        # Has a DBLP candidate but low title similarity
-        # Map weak matches to UNVERIFIED to be re-checked by author matching or Gemini
-        # Unless confidence is decent (candidate might be correct)
-        if conf > 0.4:
-            result["final_label"] = "REVIEW"
-        else:
-            result["final_label"] = "UNVERIFIED"
-
-    else:  # NOT_FOUND
-        result["final_label"] = "UNVERIFIED"
-
-    return result
+# Function classify_reference removed as it is now integrated into verify_title_with_dblp

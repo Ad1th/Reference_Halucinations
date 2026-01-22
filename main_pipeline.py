@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from extraction.extractRefData import extract_references_xml
 from extraction.extractMetadata import extract_references_metadata
 from extraction.pdfplumber_extract import extract_references_text, extract_titles_with_regex
-from verification.dblp import verify_title_with_dblp, classify_reference, query_dblp, extract_candidates, title_similarity, SIMILARITY_THRESHOLD
+from verification.dblp import verify_title_with_dblp, query_dblp, extract_candidates, title_similarity, SIMILARITY_THRESHOLD
 from verification.utils import compare_author_lists, compare_years
 from verification.gemini import gemini_metadata_match, gemini_extract_titles_from_text, gemini_verify_reference_exists, gemini_batch_verify
 
@@ -128,7 +128,6 @@ def step1_pre_metadata_check(pdf_path: str, report: VerificationReport) -> Tuple
         title = ref["title"]
         authors = ref.get("authors", [])
         dblp_result = verify_title_with_dblp(title, authors)
-        dblp_result = classify_reference(dblp_result)
         
         combined = {
             "ref_num": i,
